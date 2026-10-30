@@ -1,88 +1,150 @@
-/*
-* Prints the result of the button press to the serial monitor.
-*/
 
-int BUTTON_PIN = 6;
-int BUTTON_PIN_2 = 7;
-int LED_PIN_0 = A5;
-int LED_PIN_1 = A4;
-int LED_PIN_2 = A3;// most significant 
+#include <WiFiS3.h>
 
-int counter;// goes from 0 to 7
+#define SCAN_INTERVAL 3000
+#define MAX_NETWORKS 10
 
-bool down_1;
-bool down_2;
+struct Network {
+  String bssid;
+  String ssid;
+  int previousRSSI;
+  int currentRSSI;
+  bool seen;
+};
+
+Network networks[MAX_NETWORKS];
+int networkCount = 0;
+
+unsigned long lastScan = 0;
+
+String getBSSID(int index) {
+  byte mac[6] = {0};
+
+  if (WiFi.BSSID(index, mac) == nullptr) {
+    return "";
+  }
+
+  char address[18];
+
+  snprintf(address, sizeof(address),
+    "%02X:%02X:%02X:%02X:%02X:%02X",
+    mac[0], mac[1], mac[2],
+    mac[3], mac[4], mac[5]);
+
+  return String(address);
+}
+
+void scanWiFi() {
+
+  for (int i = 0; i < networkCount; i++) {
+    networks[i].seen = false;
+  }
+
+  int count = WiFi.scanNetworks();
+
+  if (count < 0) {
+    Serial.println("Scan failed");
+    return;
+  }
+
+  Serial.println("\n===== SIGNAL CHANGES =====");
+
+  for (int i = 0; i < count; i++) {
+
+    String bssid = getBSSID(i);
+
+    if (bssid.length() == 0) continue;
+
+    int rssi = WiFi.RSSI(i);
+    int found = -1;
+
+    for (int j = 0; j < networkCount; j++) {
+      if (networks[j].bssid == bssid) {
+        found = j;
+        break;
+      }
+    }
+
+    if (found == -1) {
+
+      if (networkCount >= MAX_NETWORKS) continue;
+
+      found = networkCount++;
+
+      networks[found].bssid = bssid;
+      networks[found].ssid = WiFi.SSID(i);
+      networks[found].previousRSSI = rssi;
+      networks[found].currentRSSI = rssi;
+      networks[found].seen = true;
+
+      Serial.print("[NEW] ");
+      Serial.print(networks[found].ssid);
+      Serial.print(" | ");
+      Serial.print(rssi);
+      Serial.println(" dBm");
+
+    } else {
+
+      networks[found].previousRSSI =
+        networks[found].currentRSSI;
+
+      networks[found].currentRSSI = rssi;
+      networks[found].seen = true;
+
+      int change = rssi -
+        networks[found].previousRSSI;
+
+      Serial.print(networks[found].ssid);
+      Serial.print(" | ");
+      Serial.print(rssi);
+      Serial.print(" dBm | ");
+
+      if (change > 0) {
+        Serial.print("STRONGER +");
+        Serial.print(change);
+        Serial.println(" dB");
+      }
+      else if (change < 0) {
+        Serial.print("WEAKER ");
+        Serial.print(change);
+        Serial.println(" dB");
+      }
+      else {
+        Serial.println("UNCHANGED");
+      }
+    }
+  }
+
+  Serial.println("==========================");
+}
 
 void setup() {
-   Serial.begin(9600);
-   while (!Serial); // Wait for Serial to initialize
-   pinMode(BUTTON_PIN, INPUT);
-   pinMode(BUTTON_PIN_2, INPUT);
-   pinMode(LED_PIN_0, OUTPUT);
-   pinMode(LED_PIN_1, OUTPUT);
-   pinMode(LED_PIN_2, OUTPUT);
-   counter =0;
 
-   bool down_1 = false;
-   bool down_2 = false;
+  Serial.begin(9600);
 
+  unsigned long start = millis();
+
+  while (!Serial && millis() - start < 5000) {
+    delay(10);
+  }
+
+  Serial.println("WIFI SIGNAL CHANGE DETECTOR");
+
+  if (WiFi.status() == WL_NO_MODULE) {
+    Serial.println("WiFi module unavailable!");
+
+    while (true) {
+      delay(1000);
+    }
+  }
 }
 
 void loop() {
-  // analogWrite(LED_PIN_0, digitalRead())
-  // Serial.println(digitalRead(BUTTON_PIN));
-  // delay(100);
 
-  // Serial.println(digitalRead(BUTTON_PIN_2));
-  // Serial.println(digitalRead(BUTTON_PIN));
-  // Serial.println(counter);
-  if (digitalRead(BUTTON_PIN)){
-    if(!down_1){
-      if(counter != 7){
-        counter +=1;
-      } 
-      down_1 = true;
-    }
-  }
-  else {
-    down_1 = false; 
-  }
-  if (digitalRead(BUTTON_PIN_2)){
-    //Serial.println(5);
-    if(!down_2){
-      if(counter!=0){
-        //Serial.println("yes");
-        counter = counter-1;
-      }
-      down_2 = true;
-    }
-  }
-  else {
-    down_2 = false; 
-  }
+  if (millis() - lastScan >= SCAN_INTERVAL) {
 
-  // led logic
-  if(counter & 1){
-    //Serial.println("yes");
-    digitalWrite(LED_PIN_0, HIGH);
-  }
-  else {
-    digitalWrite(LED_PIN_0, LOW);
-  }
+    lastScan = millis();
 
-  if(counter & 2){
-    //Serial.println("no");
-    digitalWrite(LED_PIN_1, HIGH);
-  }
-  else {
-    digitalWrite(LED_PIN_1, LOW);
-  }
-  
-  if(counter & 4){
-    // Serial.println("come");
-    digitalWrite(LED_PIN_2, HIGH);
-  }
-  else {
-    digitalWrite(LED_PIN_2, LOW); 
+    scanWiFi();
   }
 }
