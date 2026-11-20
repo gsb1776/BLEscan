@@ -1,49 +1,243 @@
-// #include <SPI.h>
-// #include <nRF24L01.h>
-// #include <RF24.h>
+#include "snake.h"
 
-// // generated script to test radio
-// // CE, CSN pins
-// RF24 radio(9, 8);
+void setup() {
+  Serial.begin(9600);
+  while(!Serial);
 
-// // Communication address (must match transmitter)
-// const byte address[6] = "00001";
+  // calibrate(); // comment out when done calibrating
+  // LAB STEP 4:
+  // Change to 6, 7, 8, 9 based on calibration
+  capSensors[UP] = 6;
+  capSensors[RIGHT] = 9;
+  capSensors[DOWN] = 8;
+  capSensors[LEFT] = 7;
+  // Change to threshold based on calibration
+  thresholds[UP] = 650;
+  thresholds[DOWN] = 650;
+  thresholds[LEFT] = 650;
+  thresholds[RIGHT] = 650;
 
-// void setup() {
-//   Serial.begin(9600);
+  // testCalibration();
 
-//   // Initialize radio
-//   if (!radio.begin()) {
-//     Serial.println("Radio hardware not responding!");
-//     while (1) {
-//       delay(1000);
-//     }
-//   }
+  initializeSystem();
+//  testAll();
+//  testTurns();
+//  while(true);
+}
 
-//   // Configure communication
-//   radio.setPALevel(RF24_PA_LOW);
-//   radio.setDataRate(RF24_1MBPS);
-//   radio.setChannel(76);
+/*
+ * Computes whether the given x,y is out of bounds
+ * Playable game area is from (1, 1) (top-left) to (12, 8) (bottom-right)
+ */
+bool outOfBounds(byte x, byte y) {
+  if (x < 1 || x > 12 || y < 1 || y > 8) {
+    return true;
+  }
 
-//   // Open reading pipe
-//   radio.openReadingPipe(0, address);
+  return false; // LAB STEP 5
+}
 
-//   // Start receiving
-//   radio.startListening();
+/*
+ * Computes new x,y one step in direction o from given x,y
+ */
+xy newPos(byte x, byte y, orientation o) {
+  // LAB STEP 5
+  switch(o) {
+    case NONE:
+      return {x, y,};
+    case UP:
+      return {x, y-1};
+    case RIGHT:
+      return {x+1, y};
+    case DOWN:
+      return {x, y+1};
+    case LEFT:
+      return {x-1, y};
+    default:
+      return {x, y};
+  }
+}
 
-//   Serial.println("NRF24L01 Receiver Ready!");
-//   Serial.println("Waiting for messages...");
-// }
+/*
+ * Computes whether newO is a 90 degree turn from currO
+ * If either newO or currO is NONE, returns false
+ */
+bool turn(orientation currO, orientation newO) {
+  // LAB STEP 5
+  switch(currO) {
+    case UP:
+      return (newO == LEFT || newO == RIGHT);
+    case DOWN:
+      return (newO == LEFT || newO == RIGHT);
+    case LEFT:
+      return (newO == UP || newO == DOWN);
+    case RIGHT:
+      return (newO == UP || newO == DOWN);
+    default:
+      return false;
+  }
+}
 
-// void loop() {
+void loop() {
+  // LAB STEP 6
+  static full_state fs = {
+    {peek().x, peek().y, NONE}, // snakeHead
+    randomFruit(), // fruit
+    500, // step
+    1, // length
+    millis(), // savedClock
+    0, // avoidSteps
+    s_INIT // state
+  };
 
-//   if (radio.available()) {
+  // detect edge on button push
+  static bool prevButton = false;
+  bool curButton = false;
+  if (digitalRead(2) == HIGH) {
+    if (!prevButton) {
+      curButton = true;
+    }
+    prevButton = true;
+  } else {
+    prevButton = false;
+  }
 
-//     char receivedMessage[32] = {0};
+  // UNCOMMENT AFTER COMPLETING LAB STEP 6
+  fs = updateSM(fs, getControl(), curButton, millis());
+  //Serial.println(fs.state);
+  // Serial.print(fs.head.x);
+  // Serial.print(", ");
+  // Serial.println(fs.head.y);
 
-//     radio.read(&receivedMessage, sizeof(receivedMessage));
+  static int loopCount = 5;
+  loopCount++;
+  if (loopCount == 6) { // toggle every 60ms
+    toggleFruit();
+    loopCount = 0;
+  }
+  delay(10);
+}
 
-//     Serial.print("Received: ");
-//     Serial.println(receivedMessage);
-//   }
-// }
+/*
+ * Takes in a struct representing the current SM state and state variables, as well as the three inputs
+ * and returns the updated SM state and state variables
+ */
+full_state updateSM(full_state currState, orientation control, bool button, unsigned long clock) {
+  xyo head = currState.head;
+  xy fruit = currState.fruit;
+  unsigned long step = currState.step;
+  byte snakeLength = currState.snakeLength;
+  unsigned long savedClock = currState.savedClock;
+  byte avoidSteps = currState.avoidSteps;
+  fsm_state state = currState.state;
+
+  full_state ret = currState; // FSM state and state variables to return. Default is to keep unchanged.
+  // LAB STEP 7
+  switch(state) {
+    case s_INIT:
+    if (control != NONE) { // t 1-2
+      xy newHead = newPos(head.x, head.y, control);
+      ret.head = {newHead.x, newHead.y, control};
+      ret.state = s_REG_CALC;
+    } 
+    break; // s_INIT
+
+    case s_REG_CALC:
+    if ((head.x != fruit.x || head.y != fruit.y) && !collision(head.x, head.y) &&
+        !outOfBounds(head.x, head.y)) { // t 2-3a
+      add(head.x, head.y);
+      remove();
+      ret.savedClock = clock;
+      ret.state = s_REG_WAIT;
+    }
+    else if ((head.x == fruit.x && head.y == fruit.y) && !collision(head.x, head.y) &&
+        !outOfBounds(head.x, head.y) && snakeLength < 95) { // t 2-3a
+      add(head.x, head.y);
+      ret.fruit = randomFruit();
+      ret.step = (step * 127) / 128;
+      ret.snakeLength = snakeLength + 1;
+      ret.savedClock = clock;
+      ret.state = s_REG_WAIT;
+    }
+    else if (collision(head.x, head.y) || outOfBounds(head.x, head.y)) {
+      Serial.println("Game over! You suck.");
+      ret.state = s_GAME_OVER;
+    }
+    else if ((head.x == fruit.x && head.y == fruit.y) && !collision(head.x, head.y) && 
+        !outOfBounds(head.x, head.y) && snakeLength == 95) {
+      Serial.println("You won!");
+      ret.state = s_WIN;
+    }
+    // add else ifs for other transitions out of state 2
+    break; // s_REG_CALC
+
+    case s_REG_WAIT:
+    if ((clock - savedClock >= step) && !button) {
+      xy newHead = newPos(head.x, head.y, head.o);
+      ret.head = {newHead.x, newHead.y, head.o};
+      ret.state = s_REG_CALC;
+    }
+    else if (!button && (clock - savedClock < step) && turn(head.o, control)) {
+      xy newHead = newPos(head.x, head.y, control);
+      ret.head = {newHead.x, newHead.y, control};
+      ret.state = s_REG_CALC;
+    }
+    else if (button) {
+      invert();
+      // xy newHead = newPos(head.x, head.y, head.o);
+      // ret.head = {newHead.x, newHead.y, head.o};
+      // add(head.x, head.y);
+      ret.savedClock = clock;
+      ret.avoidSteps = 0;
+      ret.state = s_AVOID_WAIT;
+    }
+    break; // s_REG_WAIT
+
+    case s_AVOID_WAIT:
+    if (avoidSteps >= (2000 / step)) {
+      invert();
+      //ret.savedClock = clock;
+      ret.state = s_REG_WAIT;
+    }
+    else if ((clock - savedClock >= step) && (avoidSteps < (2000 / step))) {
+      xy newHead = newPos(head.x, head.y, head.o);
+      ret.head = {newHead.x, newHead.y, head.o};
+      ret.avoidSteps = avoidSteps + 1;
+      ret.state = s_AVOID_CALC;
+    }
+    else if ((clock - savedClock < step) && (avoidSteps < (2000 / step)) && (turn(head.o, control) || head.o == control)) {
+      xy newHead = newPos(head.x, head.y, control);
+      ret.head = {newHead.x, newHead.y, control};
+      ret.avoidSteps = avoidSteps + 1;
+      ret.state = s_AVOID_CALC;
+    }
+    break; // s_AVOID_WAIT
+
+    case s_AVOID_CALC:
+    if ((head.x != fruit.x || head.y != fruit.y) && !collision(head.x, head.y) &&
+        !outOfBounds(head.x, head.y)) {
+      add(head.x, head.y);
+      remove();
+      ret.savedClock = clock;
+      ret.state = s_AVOID_WAIT;
+    }
+    else if ((head.x == fruit.x && head.y == fruit.y) || collision(head.x, head.y) ||
+        outOfBounds(head.x, head.y)) {
+      Serial.println("Game over! You suck.");
+      ret.state = s_GAME_OVER;
+    }
+    break; // s_AVOID_CALC
+
+    case s_WIN:
+    // terminal state: no outgoing transitions
+    break; // s_WIN
+
+    case s_GAME_OVER:
+    // terminal state: no outgoing transitions
+    break; // s_GAME_OVER
+
+    default:
+    Serial.println("Invalid state");
+  }
+  return ret;
+}
